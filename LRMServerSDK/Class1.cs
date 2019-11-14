@@ -16,12 +16,15 @@ namespace LRMServerSDK
         /// <summary>
         /// initialize a new instance of the LRMServer Class
         /// </summary>
-        /// <param name="licenseID">Your LRM License ID</param>
-        /// <param name="licensePassword">Your LRM License Password</param>
-        /// <param name="serverAdress">Your HTTP Server Address, ex http://123.45.567.9.com/ or http://LRMServer.com/</param>
-        public LRMServer (ulong licenseID, string licensePassword, string serverAdress)
+        /// <param name="config">The Config class, contains your server details</param>
+        public LRMServer(Config config)
         {
-
+            if(config.allowedFlightSims.Length >=1 && config.licenseID != 0)
+            {
+                LoadedConfig = config;
+            }
+            else
+                throw new Exception("Config is not filled out or invalad config provided");
         }
         public static event EventHandler LogMessage;
         public class LogMessageEventArgs : EventArgs { public string Message { get; set; } }
@@ -89,7 +92,7 @@ namespace LRMServerSDK
         #endregion FSenum
 
         /// <summary>
-        /// The schema for communications, all communications are in this format
+        /// The schema for communication data, all communication data is in this format
         /// </summary>
         public struct LRM_HTTPData
         {
@@ -97,25 +100,51 @@ namespace LRMServerSDK
             public Dictionary<string, string> Body { get; set; }
             public string Auth { get; set; }
         }
-       
+        public class Config
+        {
+            public ulong licenseID { get; set; }
+            public string licensePW { get; set; }
+            public string ServerAddress { get; set; }
+            public string LRMServerName { get; set; }
+            public string ServerType { get; set; }
+            public FlightSim[] allowedFlightSims { get; set; }
+        }
+        /// <summary>
+        /// The Config of the Server
+        /// </summary>
+        public Config LoadedConfig { get; set; }
         private HttpListener LRMServerListener { get; set; }
+        /// <summary>
+        /// Connected T/F bool
+        /// </summary>
         internal bool isConnected { get; private set; }
+        /// <summary>
+        /// Auth T/F bool
+        /// </summary>
         internal bool isAuthorized { get; private set; }
+        /// <summary>
+        /// True if the server is running and accepting clients
+        /// </summary>
         internal bool ServerRunning { get; private set; }
+        /// <summary>
+        /// Number of connected clients
+        /// </summary>
         public int ConnectedPlayers { get; private set; }
+
         private string authToken { get; set; }
 
         private const string MasterServerAddress = "localhost:8080";
         /// <summary>
-        /// Connect and authenticate with the master server
+        /// Connects and authenticate with the master server
         /// </summary>
-        /// <param name="LicenseID">Your LRMServer License ID</param>
-        /// <param name="LicensePW">Your LRMServer License Password</param>
-        /// <param name="lrmServerName">The LRM Server name you want</param>
-        /// <param name="ServerType">The Type of LRM Server, ex: Landing Competition</param>
-        /// <param name="AllowedFlightSims">The allowed flightsimulators, ex: P3D</param>
-        public async Task Connect(ulong LicenseID, string LicensePW, string lrmServerName, string ServerType, params FlightSim[] AllowedFlightSims)
+        public async Task Connect()
         {
+            var LicenseID = LoadedConfig.licenseID;
+            var LicensePW = LoadedConfig.licensePW;
+            var AllowedFlightSims = LoadedConfig.allowedFlightSims;
+            var lrmServerName = LoadedConfig.LRMServerName;
+            var ServerType = LoadedConfig.ServerType;
+
             string fligsims = string.Join("|", AllowedFlightSims);
 
             LRM_HTTPData d = new LRM_HTTPData()
@@ -144,7 +173,15 @@ namespace LRMServerSDK
         {
             LRMServerListener = new HttpListener();
             if (!HttpListener.IsSupported) { throw new Exception("Your machine does not Support an HttpListener!"); }
-            
+            LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/inbound/");
+            LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/outbound/");
+            LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/authorize/");
+            LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/");
+
+        }
+        private void logMsg(string msg)
+        {
+            LogMessage.Invoke(this, new LogMessageEventArgs() { Message = msg });
         }
         private string EncodePW(string password)
         {
