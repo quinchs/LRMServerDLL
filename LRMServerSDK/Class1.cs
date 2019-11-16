@@ -169,7 +169,7 @@ namespace LRMServerSDK
                 LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Authorized by master server!" });
             }
         }
-        private async Task StartupServer()
+        public void StartupServer()
         {
             LRMServerListener = new HttpListener();
             if (!HttpListener.IsSupported) { throw new Exception("Your machine does not Support an HttpListener!"); }
@@ -177,6 +177,8 @@ namespace LRMServerSDK
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/outbound/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/authorize/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/");
+            MessageHandler m = new MessageHandler(LRMServerListener);
+            m.StartRecieve();
 
         }
         private void logMsg(string msg)
