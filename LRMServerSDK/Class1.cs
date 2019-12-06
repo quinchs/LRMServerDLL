@@ -8,9 +8,14 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using System.Net.WebSockets;
+using System.Threading;
 
 namespace LRMServerSDK
 {
+    /// <summary>
+    /// Base class for your LRM serevr
+    /// </summary>
     public class LRMServer
     {
         /// <summary>
@@ -26,10 +31,22 @@ namespace LRMServerSDK
             else
                 throw new Exception("Config is not filled out or invalad config provided");
         }
-        public static event EventHandler LogMessage;
+        /// <summary>
+        /// LRM server log event, use for debug or fancy consoles :D
+        /// </summary>
+        public event EventHandler<LogMessageEventArgs> LogMessage;
+        /// <summary>
+        /// Log Message Event data.
+        /// </summary>
         public class LogMessageEventArgs : EventArgs { public string Message { get; set; } }
-        public static event EventHandler UserConnected;
-        public static event EventHandler UserDisconnected;
+        /// <summary>
+        /// User connected event
+        /// </summary>
+        public event EventHandler UserConnected;
+        /// <summary>
+        /// User Disconnect event
+        /// </summary>
+        public event EventHandler UserDisconnected;
         #region FSenum
         //
         // Summary:
@@ -96,17 +113,65 @@ namespace LRMServerSDK
         /// </summary>
         public struct LRM_HTTPData
         {
+            /// <summary>
+            /// Header of the message
+            /// </summary>
             public string Header { get; set; }
+            /// <summary>
+            /// Body of the message, contains info regarding the Header
+            /// </summary>
             public Dictionary<string, string> Body { get; set; }
+            /// <summary>
+            /// Auth token of the LRM Server
+            /// </summary>
             public string Auth { get; set; }
         }
+        /// <summary>
+        /// Your LRM server configuration Settings
+        /// </summary>
         public class Config
         {
+            /// <summary>
+            /// Initializes a new Config class
+            /// </summary>
+            /// <param name="licenseID">Your Licence ID</param>
+            /// <param name="licensePW">Your Licence Password</param>
+            /// <param name="ServerAddress">Your server BASE Address, ex: https://yourDomain.com/LRM</param>
+            /// <param name="LRMServerName">Your LRM Server name</param>
+            /// <param name="ServerType">Your Server type/genre. ex: Landing Compitition </param>
+            /// <param name="allowedFlightSims">Allowed flight simulators for your server, if you want only FSX users to connect to your server you can specify that here</param>
+            public Config(ulong licenseID, string licensePW, string ServerAddress, string LRMServerName, string ServerType, params FlightSim[] allowedFlightSims)
+            {
+                this.allowedFlightSims = allowedFlightSims;
+                this.licenseID = licenseID;
+                this.licensePW = licensePW;
+                this.LRMServerName = LRMServerName;
+                this.ServerType = ServerType;
+                this.ServerAddress = ServerAddress;
+            }
+            /// <summary>
+            /// Your Licence ID
+            /// </summary>
             public ulong licenseID { get; set; }
+            /// <summary>
+            /// Your Licence Password
+            /// </summary>
             public string licensePW { get; set; }
+            /// <summary>
+            /// Your server BASE Address, ex: https://yourDomain.com/LRM
+            /// </summary>
             public string ServerAddress { get; set; }
+            /// <summary>
+            /// Your LRM Server name
+            /// </summary>
             public string LRMServerName { get; set; }
+            /// <summary>
+            /// Your Server type/genre. ex: Landing Compitition 
+            /// </summary>
             public string ServerType { get; set; }
+            /// <summary>
+            /// Allowed flight simulators for your server, if you want only FSX users to connect to your server you can specify that here
+            /// </summary>
             public FlightSim[] allowedFlightSims { get; set; }
         }
         /// <summary>
@@ -117,23 +182,23 @@ namespace LRMServerSDK
         /// <summary>
         /// Connected T/F bool
         /// </summary>
-        internal bool isConnected { get; private set; }
+        public bool isConnected { get; private set; }
         /// <summary>
         /// Auth T/F bool
         /// </summary>
-        internal bool isAuthorized { get; private set; }
+        public bool isAuthorized { get; private set; }
         /// <summary>
         /// True if the server is running and accepting clients
         /// </summary>
-        internal bool ServerRunning { get; private set; }
+        public bool ServerRunning { get; private set; }
         /// <summary>
         /// Number of connected clients
         /// </summary>
         public int ConnectedPlayers { get; private set; }
 
-        private string authToken { get; set; }
+        internal string authToken { get; set; }
 
-        private const string MasterServerAddress = "localhost:8080";
+        private const string MasterServerAddress = "http://localhost:8080/";
         /// <summary>
         /// Connects and authenticate with the master server
         /// </summary>
@@ -166,8 +231,21 @@ namespace LRMServerSDK
             {
                 isConnected = true;
                 isAuthorized = true;
-                LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Authorized by master server!" });
+                authToken = resp.Auth;
+                logMsg($"Authorized by master server!");
+
             }
+            ExchangeWebsocket();
+        }
+        public async Task ExchangeWebsocket()
+        {
+            ClientWebSocket c = new ClientWebSocket();
+            await c.ConnectAsync(new Uri(MasterServerAddress), CancellationToken.None);
+            if(c.State == WebSocketState.Open)
+            {
+                MessageHandler.WebsocketMSGHandler h = new MessageHandler.WebsocketMSGHandler(c);
+            }
+
         }
         public void StartupServer()
         {
@@ -177,13 +255,13 @@ namespace LRMServerSDK
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/outbound/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/authorize/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/");
-            MessageHandler m = new MessageHandler(LRMServerListener);
+            MessageHandler m = new MessageHandler(LRMServerListener,this);
             m.StartRecieve();
 
         }
-        private void logMsg(string msg)
+        internal void logMsg(string msg)
         {
-            LogMessage.Invoke(this, new LogMessageEventArgs() { Message = msg });
+            LogMessage?.Invoke(null, new LogMessageEventArgs() { Message = msg });
         }
         private string EncodePW(string password)
         {
@@ -191,14 +269,13 @@ namespace LRMServerSDK
             SHA512 hsh = new SHA512Managed();
             return Encoding.ASCII.GetString(hsh.ComputeHash(Encoding.ASCII.GetBytes(b64)));
         }
-        private async Task<string> SendandRecieveJson(LRM_HTTPData data)
+        protected async Task<string> SendandRecieveJson(LRM_HTTPData data)
         {
             try
             {
                 HttpClient c = new HttpClient();
                 string json = JsonConvert.SerializeObject(data);
-                LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Sending the json: {json}" });
-
+                logMsg($"Sending the json: {json}");
                 var req = new HttpRequestMessage()
                 {
                     Content = new ByteArrayContent(Encoding.ASCII.GetBytes(json)),
@@ -214,6 +291,7 @@ namespace LRMServerSDK
                 Array.Copy(buff, databuff, rec);
                 string text = Encoding.ASCII.GetString(databuff);
                 LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Recieved new json: {text}" });
+                c.Dispose();
                 return text;
                
             }
@@ -222,14 +300,14 @@ namespace LRMServerSDK
                 throw new Exception("Could Not Send Data to Master Server!", ex);
             }
         }
-        
-        private async Task<LRM_HTTPData> SendandRecieveHTTPData(LRM_HTTPData data)
+
+        protected async Task<LRM_HTTPData> SendandRecieveHTTPData(LRM_HTTPData data)
         {
             try
             {
                 HttpClient c = new HttpClient();
                 string json = JsonConvert.SerializeObject(data);
-                LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Sending the json: {json}" });
+                logMsg($"Sending the json: {json}");
                 var req = new HttpRequestMessage()
                 {
                     Content = new ByteArrayContent(Encoding.ASCII.GetBytes(json)),
@@ -245,6 +323,7 @@ namespace LRMServerSDK
                 Array.Copy(buff, databuff, rec);
                 string text = Encoding.ASCII.GetString(databuff);
                 LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Recieved new json: {text}" });
+                c.Dispose();
                 return JsonConvert.DeserializeObject<LRM_HTTPData>(text);
             }
             catch (Exception ex)
