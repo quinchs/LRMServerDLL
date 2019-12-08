@@ -108,6 +108,22 @@ namespace LRMServerSDK
         }
         #endregion FSenum
 
+        internal struct OffsetHTTP
+        {
+            /// <summary>
+            /// Header of the message
+            /// </summary>
+            public string Header { get; set; }
+            /// <summary>
+            /// Body of the message, contains info regarding the Header
+            /// </summary>
+            public List<offsettSubscription> OffsetList { get; set; }
+            /// <summary>
+            /// Auth token of the LRM Server
+            /// </summary>
+            public string Auth { get; set; }
+        }
+
         /// <summary>
         /// The schema for communication data, all communication data is in this format
         /// </summary>
@@ -158,7 +174,7 @@ namespace LRMServerSDK
             /// </summary>
             public string licensePW { get; set; }
             /// <summary>
-            /// Your server BASE Address, ex: https://yourDomain.com/LRM
+            /// Your server BASE Address DO NOT add a / (slash) at the end, ex: https://yourdomain.com/lrm
             /// </summary>
             public string ServerAddress { get; set; }
             /// <summary>
@@ -198,6 +214,8 @@ namespace LRMServerSDK
 
         internal string authToken { get; set; }
 
+        internal List<offsettSubscription> offsets { get; set; }
+
         private const string MasterServerAddress = "http://localhost:8080/";
         /// <summary>
         /// Connects and authenticate with the master server
@@ -235,9 +253,9 @@ namespace LRMServerSDK
                 logMsg($"Authorized by master server!");
 
             }
-            ExchangeWebsocket();
+            await ExchangeWebsocket();
         }
-        public async Task ExchangeWebsocket()
+        internal async Task ExchangeWebsocket()
         {
             ClientWebSocket c = new ClientWebSocket();
             await c.ConnectAsync(new Uri(MasterServerAddress), CancellationToken.None);
@@ -247,17 +265,101 @@ namespace LRMServerSDK
             }
 
         }
-        public void StartupServer()
+        /// <summary>
+        /// Starts up your LRM server.
+        /// </summary>
+        /// <param name="offsetSubscriptions">The offsets you want to recieve from LRM Clients, Max is 10 offsets</param>
+        public async void StartupServer(List<offsettSubscription> offsetSubscriptions)
         {
+            if(offsetSubscriptions.Count > 10) { throw new Exception("Cant have more than 10 offsets!"); }
+            offsets = offsetSubscriptions;
             LRMServerListener = new HttpListener();
             if (!HttpListener.IsSupported) { throw new Exception("Your machine does not Support an HttpListener!"); }
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/inbound/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/outbound/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/authorize/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/");
+            OffsetHTTP data = new OffsetHTTP()
+            {
+                Header = "offsets",
+                Auth = authToken,
+                OffsetList = offsets
+            };
+            var d = await SendandRecieveHTTPData(data);
+            if (isError(d))
+                throw new Exception($"Server error!, {d.Header}");
             MessageHandler m = new MessageHandler(LRMServerListener,this);
             m.StartRecieve();
-
+            
+        }
+        /// <summary>
+        /// Details about the offset data you want to revieve from LRM Clients
+        /// </summary>
+        public struct offsettSubscription
+        {
+            /// <summary>
+            /// Name of the offset (doesnt need to be the acual name, can be what you want). when the OffsetData event triggered it will have the name you specify here
+            /// </summary>
+            public string name { get; set; }
+            /// <summary>
+            /// the Address of the offset. EX: 0x11BA is the gForce offset.
+            /// </summary>
+            public int offsetAdress { get; set; }
+            /// <summary>
+            /// The type of data the offset is, ex 0x11BA is gForce and its data is read as an int32
+            /// </summary>
+            public DataType DataType { get; set; }
+            /// <summary>
+            /// Tells the LRM Client how often it should send the offset value
+            /// </summary>
+            public Priority offsetPriority { get; set; }
+        
+        }
+        /// <summary>
+        /// The enum containing the Priority level
+        /// </summary>
+        public enum Priority
+        {
+            /// <summary>
+            /// Sends the Offset value every 5 seconds
+            /// </summary>
+            Low = 5000,
+            /// <summary>
+            /// Sends the offset value every 2.5 seconds
+            /// </summary>
+            Medium = 2500,
+            /// <summary>
+            /// Sends the offset value every 1 seconds
+            /// </summary>
+            High = 1000,
+            /// <summary>
+            /// a constant stream of the offset
+            /// </summary>
+            Constant = 10,
+        }
+        /// <summary>
+        /// The type of data the Offset is,
+        /// </summary>
+        public enum DataType
+        {
+            Byte,
+            SByte,
+            int16,
+            uint16,
+            int32,
+            uint32,
+            int64,
+            uint64,
+            Double,
+            single,
+            String,
+            bitArray
+        }
+        internal bool isError(LRM_HTTPData data)
+        {
+            if (data.Header.ToLower().Contains("error"))
+                return true;
+            return false;
         }
         internal void logMsg(string msg)
         {
@@ -269,7 +371,7 @@ namespace LRMServerSDK
             SHA512 hsh = new SHA512Managed();
             return Encoding.ASCII.GetString(hsh.ComputeHash(Encoding.ASCII.GetBytes(b64)));
         }
-        protected async Task<string> SendandRecieveJson(LRM_HTTPData data)
+        internal async Task<string> SendandRecieveJson(object data)
         {
             try
             {
@@ -301,7 +403,7 @@ namespace LRMServerSDK
             }
         }
 
-        protected async Task<LRM_HTTPData> SendandRecieveHTTPData(LRM_HTTPData data)
+        internal async Task<LRM_HTTPData> SendandRecieveHTTPData(object data)
         {
             try
             {
