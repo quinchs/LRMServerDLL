@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using static LRMServerSDK.LRMServer;
+using static LRMServerSDK.Packets;
 
 namespace LRMServerSDK
 {
@@ -47,6 +48,7 @@ namespace LRMServerSDK
                     try
                     {
                         await HandleWebSocket(socket);
+                    
                     }
                     catch (Exception ex)
                     {
@@ -93,39 +95,13 @@ namespace LRMServerSDK
                         var receivedString = Encoding.UTF8.GetString(receiveBuffer, 0, count);
                         inst.logMsg($"-=- Recieved new Websocket data -=-\n{receivedString}\n-=- End -=-");
                         //handle the new message
-                        var msg = handleMessage(receivedString);
-                        await socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(msg)), WebSocketMessageType.Text, true, CancellationToken.None);
+                        var packet = JsonConvert.DeserializeObject<Packets.RawPacket>(receivedString);
+                        var msg = await MessageResponce.handleMessage(packet);
+                        string cont = JsonConvert.SerializeObject(Packets.GetRawPacket(msg));
+                        await socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(cont)), WebSocketMessageType.Text, true, CancellationToken.None);
                         inst.logMsg($"-=- Sent back a websocket responce -=-\n{msg}\n-=- End -=-");
                     }
                 }
-            }
-            internal string handleMessage(string recieved)
-            {
-                LRM_HTTPData data = JsonConvert.DeserializeObject<LRM_HTTPData>(recieved);
-                switch (data.Header)
-                {
-                    case "ping":
-                        return ping(data);
-                    
-                }
-                return "unknown";
-            }
-            string ping(LRM_HTTPData recieved)
-            {
-                string fligsims = string.Join("|", inst.LoadedConfig.allowedFlightSims);
-
-                LRM_HTTPData data = new LRM_HTTPData()
-                {
-                    Header = "pong",
-                    Auth = inst.authToken,
-                    Body = new Dictionary<string, string>()
-                    {
-                        {"Server_Name", inst.LoadedConfig.LRMServerName },
-                        {"Server_Type", inst.LoadedConfig.ServerType },
-                        {"Simulator_Types",  fligsims}
-                    }
-                };
-                return JsonConvert.SerializeObject(data, Formatting.Indented);
             }
         }
         internal class LRMClientAuthenticated : EventArgs
@@ -174,7 +150,7 @@ namespace LRMServerSDK
                 }
             }
         }
-        private void RecieveCallback()
+        private async void RecieveCallback()
         {
             try
             {
@@ -183,7 +159,32 @@ namespace LRMServerSDK
                 HttpListenerContext context = currentListener.GetContext();
                 HttpListenerRequest request = context.Request;
                 System.IO.Stream inputStream;
-                
+                if (request.IsWebSocketRequest)
+                {
+                    if (request.Headers.AllKeys.Contains("LRMAuth"))
+                    {
+                        var k = request.Headers.GetValues("LRMAuth");
+                        var d = await checkClientAuth(k.First());
+                        if (!d)
+                        {
+                            HttpListenerWebSocketContext c = await context.AcceptWebSocketAsync(null);
+                            await c.WebSocket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Not Authed client", CancellationToken.None);
+                            return;
+                        }
+                        else
+                        {
+                            HttpListenerWebSocketContext webSocketContext = await context.AcceptWebSocketAsync(null);
+                            WebSocket webSocket = webSocketContext.WebSocket;
+                            await webSocket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes("Accepted")), WebSocketMessageType.Text, true, CancellationToken.None);
+                        }
+                    }
+                    else
+                    {
+                        HttpListenerWebSocketContext c = await context.AcceptWebSocketAsync(null);
+                        await c.WebSocket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Not Authed client", CancellationToken.None);
+                        return;
+                    }
+                }
                 try
                 {
                     inputStream = request.InputStream;
@@ -195,16 +196,16 @@ namespace LRMServerSDK
                     byte[] databuff = new byte[recieved];
                     Array.Copy(_buffer, databuff, recieved);
 
-                    string text = Encoding.ASCII.GetString(databuff);
+                    string text = Encoding.UTF8.GetString(databuff);
                     if (text == "") { return; }
                     //do somthing with the data 
-                    LRM_HTTPData data = JsonConvert.DeserializeObject<LRM_HTTPData>(text);
+                    RawPacket data = JsonConvert.DeserializeObject<RawPacket>(text);
 
-                    string responceString = HandleIncoming(data);
+                    RawPacket resp = HandleIncoming(data);
                     
                     HttpListenerResponse response = context.Response;
 
-                    byte[] buffer = Encoding.ASCII.GetBytes(responceString);
+                    byte[] buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(resp));
                     response.ContentLength64 = buffer.Length;
                     Stream output = response.OutputStream;
                     output.Write(buffer, 0, buffer.Length);
@@ -223,21 +224,21 @@ namespace LRMServerSDK
                 throw new Exception("Error with handling message, returning Server_Error to Request", exc);
             }
         }
-        internal string HandleIncoming(LRM_HTTPData data)
+        internal RawPacket HandleIncoming(RawPacket data, WebSocket es)
         {
-            string Returnstring = "";
             switch(data.Header)
             {
                 case "New_LRMClient":
-                    Returnstring = HandleNewLRMClient(data);
-                    break;
+                    return HandleNewLRMClient(data, es);
+                    
 
             }
-            return Returnstring;
+            return null;
         }
-        internal string HandleNewLRMClient(LRM_HTTPData data)
+        internal RawPacket HandleNewLRMClient(RawPacket data, WebSocket ws) //needs to get websocket offset stream, 
         {
-            return "";
+            LRMClient c = new LRMClient(data, ws);
+            
         }
     }
 }

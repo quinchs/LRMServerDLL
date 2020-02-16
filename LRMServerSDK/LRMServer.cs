@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Net.WebSockets;
 using System.Threading;
+using static LRMServerSDK.Packets;
 
 namespace LRMServerSDK
 {
@@ -108,6 +109,10 @@ namespace LRMServerSDK
         }
         #endregion FSenum
 
+        internal abstract class LRMUser
+        {
+
+        }
         internal struct OffsetHTTP
         {
             /// <summary>
@@ -193,7 +198,7 @@ namespace LRMServerSDK
         /// <summary>
         /// The Config of the Server
         /// </summary>
-        public Config LoadedConfig { get; set; }
+        public static Config LoadedConfig { get; internal set; }
         private HttpListener LRMServerListener { get; set; }
         /// <summary>
         /// Connected T/F bool
@@ -212,7 +217,7 @@ namespace LRMServerSDK
         /// </summary>
         public int ConnectedPlayers { get; private set; }
 
-        internal string authToken { get; set; }
+        static internal string authToken { get; set; }
 
         internal List<offsettSubscription> offsets { get; set; }
 
@@ -230,21 +235,16 @@ namespace LRMServerSDK
 
             string fligsims = string.Join("|", AllowedFlightSims);
 
-            LRM_HTTPData d = new LRM_HTTPData()
+            NewLRMServerPacket p = new NewLRMServerPacket()
             {
-                Header = "New_LRMServer",
-                Auth = null,
-                Body = new Dictionary<string, string>()
-                {
-                    {"Licence_ID", Convert.ToString(LicenseID) },
-                    {"Licence_Password", EncodePW(LicensePW) },
-                    {"Server_Name", lrmServerName },
-                    {"Server_Type", ServerType },
-                    {"Simulator_Types",  fligsims}
-                }
+                Licence_ID = Convert.ToString(LicenseID),
+                Licence_Password = EncodePW(LicensePW),
+                Server_Name = lrmServerName,
+                Server_Type = ServerType,
+                Simulator_Types = AllowedFlightSims
             };
-            var resp = await SendandRecieveHTTPData(d);
-            if (resp.Header == "Server_Error") { throw new Exception($"Recieved Server error!, Reason: {resp.Body.FirstOrDefault(x => x.Key == "Reason").Value}"); }
+            var resp = await SendandRecieveHTTPData(p);
+            if (resp.Header == "Server_Error") { throw new Exception($"Invalad!, Reason: {resp.Body.FirstOrDefault(x => x.Key.ToString() == "Reason").Value}"); }
             if (resp.Header == "Server_Added")
             {
                 isConnected = true;
@@ -266,6 +266,15 @@ namespace LRMServerSDK
 
         }
         /// <summary>
+        /// Kicks a user from your server
+        /// </summary>
+        /// <param name="username">The discord username of the user you want to kick</param>
+        /// <returns>true if the user is kicked. false if failed</returns>
+        public async Task<bool> KickUser(string username)
+        {
+            return false;
+        }
+        /// <summary>
         /// Starts up your LRM server.
         /// </summary>
         /// <param name="offsetSubscriptions">The offsets you want to recieve from LRM Clients, Max is 10 offsets</param>
@@ -279,13 +288,12 @@ namespace LRMServerSDK
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/outbound/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/authorize/");
             LRMServerListener.Prefixes.Add($"{LoadedConfig.ServerAddress}/lrm/");
-            OffsetHTTP data = new OffsetHTTP()
+
+            OffsetPacket pack = new OffsetPacket()
             {
-                Header = "offsets",
-                Auth = authToken,
                 OffsetList = offsets
             };
-            var d = await SendandRecieveHTTPData(data);
+            var d = await SendandRecieveHTTPData(pack);
             if (isError(d))
                 throw new Exception($"Server error!, {d.Header}");
             MessageHandler m = new MessageHandler(LRMServerListener,this);
@@ -355,7 +363,7 @@ namespace LRMServerSDK
             String,
             bitArray
         }
-        internal bool isError(LRM_HTTPData data)
+        internal bool isError(IPacket data)
         {
             if (data.Header.ToLower().Contains("error"))
                 return true;
@@ -371,12 +379,13 @@ namespace LRMServerSDK
             SHA512 hsh = new SHA512Managed();
             return Encoding.ASCII.GetString(hsh.ComputeHash(Encoding.ASCII.GetBytes(b64)));
         }
-        internal async Task<string> SendandRecieveJson(object data)
+        internal async Task<string> SendandRecieveJson(IPacket data)
         {
             try
             {
                 HttpClient c = new HttpClient();
-                string json = JsonConvert.SerializeObject(data);
+                var pack = GetRawPacket(data);
+                string json = JsonConvert.SerializeObject(pack);
                 logMsg($"Sending the json: {json}");
                 var req = new HttpRequestMessage()
                 {
@@ -403,13 +412,14 @@ namespace LRMServerSDK
             }
         }
 
-        internal async Task<LRM_HTTPData> SendandRecieveHTTPData(object data)
+        internal static async Task<Packets.RawPacket> SendandRecieveHTTPData(Packets.IPacket data)
         {
             try
             {
                 HttpClient c = new HttpClient();
-                string json = JsonConvert.SerializeObject(data);
-                logMsg($"Sending the json: {json}");
+                var pack = GetRawPacket(data);
+                string json = JsonConvert.SerializeObject(pack);
+                //logMsg($"Sending the json: {json}");
                 var req = new HttpRequestMessage()
                 {
                     Content = new ByteArrayContent(Encoding.ASCII.GetBytes(json)),
@@ -424,14 +434,28 @@ namespace LRMServerSDK
                 byte[] databuff = new byte[rec];
                 Array.Copy(buff, databuff, rec);
                 string text = Encoding.ASCII.GetString(databuff);
-                LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Recieved new json: {text}" });
+                //LogMessage.Invoke(null, new LogMessageEventArgs() { Message = $"Recieved new json: {text}" });
                 c.Dispose();
-                return JsonConvert.DeserializeObject<LRM_HTTPData>(text);
+                return JsonConvert.DeserializeObject<Packets.RawPacket>(text);
             }
             catch (Exception ex)
             {
                 throw new Exception("Could Not Send Data to Master Server!", ex);
             }
+        }
+        internal static async Task<bool> checkClientAuth(string authToken)
+        {
+            AuthPacket p = new AuthPacket()
+            {
+                ClientAuth = authToken
+            };
+             var rsp = await SendandRecieveHTTPData(p);
+            if (rsp.Header == "good_client")
+                return true;
+            if (rsp.Header == "bad_client")
+                return false;
+            else
+                throw new Exception($"server error: {rsp.Header}");
         }
     }
 }

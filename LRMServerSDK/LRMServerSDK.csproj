@@ -45,8 +45,11 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Class1.cs" />
+    <Compile Include="LRMServer.cs" />
+    <Compile Include="LRMClient.cs" />
     <Compile Include="MessageHandler.cs" />
+    <Compile Include="MessageResponce.cs" />
+    <Compile Include="Packets.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
